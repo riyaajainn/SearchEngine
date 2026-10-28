@@ -5,7 +5,7 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 STOPWORDS = frozenset(ENGLISH_STOP_WORDS).union({"under", "below", "above", "between", "from", "to", "and", "with"})
 
 # Precompiled common structural regexes
-RE_TOKENS = re.compile(r'[a-z0-9]+')
+RE_TOKENS = re.compile(r'[a-z0-9]+', re.I)
 RE_COMPATIBLE = re.compile(r'\b(?:for|compatible with|compatible for|suitable for|fit for|designed for)\b', re.I)
 STORAGE_PATTERN = re.compile(r'\b(?:\d+\s*(?:gb|tb|mb)|\d{2,4}\s*gb)\b', re.I)
 
