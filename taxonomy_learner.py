@@ -24,12 +24,18 @@ def mine_core_device_vocabulary(os_client, index_name: str = "products-v1") -> s
                 "aggs": {"subcats": {"terms": {"field": "subcategory_name.raw", "size": 200}}}
             }
         )
+        non_device_descriptors = {
+            "and", "the", "for", "with", "case", "cover", "bag", "sleeve",
+            "strap", "guard", "skin", "stand", "holder", "sticker", "decal",
+            "protector", "glass", "tempered", "care", "body", "items", "decor"
+        }
         for b in res.get("aggregations", {}).get("subcats", {}).get("buckets", []):
             sc = b["key"].lower()
-            if "accessor" not in sc:
-                for w in re.findall(r'[a-z]{2,}', sc):
-                    if w not in ("and", "the", "for", "men", "women", "kids", "boys", "girls", "with", "case", "cover", "bag", "sleeve", "strap", "guard"):
-                        learned.add(w)
+            if any(k in sc for k in ("laptop", "mobile", "phone", "refrigerator", "television", "tv", "washing", "conditioner", "tablet", "camera")):
+                if "accessor" not in sc:
+                    for w in re.findall(r'[a-z]{3,}', sc):
+                        if w not in non_device_descriptors:
+                            learned.add(w)
     except Exception:
         pass
     return learned
@@ -47,20 +53,19 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
     if not hasattr(os_client, "search"):
         return learned, host_devices
     try:
-        # 1. Stratified sampling from accessory, protection, and sleeve subcategories
-        acc_queries = [
-            {"wildcard": {"subcategory_name.raw": "*accessori*"}},
-            {"wildcard": {"subcategory_name.raw": "*bag*"}},
-            {"match": {"title": "sleeve"}},
-            {"match": {"title": "sticker"}},
-            {"match": {"title": "stand"}},
+        # 1. Diversified stratified sampling across accessory subcats, low-priced misclassified hardware items, and relational prepositions
+        subs_to_sample = [
+            {"terms": {"subcategory_name.raw": ["Mobile accessories", "Camera accessories", "Gaming accessories", "Automobile accessories", "Travel bags", "Decorative items"]}},
+            {"bool": {"filter": [{"term": {"subcategory_name.raw": "Laptops"}}, {"range": {"price": {"lt": 1000}}}]}},
+            {"match_phrase": {"title": "for"}},
+            {"match_phrase": {"title": "compatible with"}}
         ]
         acc_titles = []
-        for q in acc_queries:
+        for q in subs_to_sample:
             try:
                 res_p = os_client.search(
                     index=index_name,
-                    body={"size": 300, "_source": ["title"], "query": q}
+                    body={"size": 600, "_source": ["title"], "query": q}
                 )
                 acc_titles.extend([h["_source"]["title"].lower() for h in res_p.get("hits", {}).get("hits", []) if "title" in h.get("_source", {})])
             except Exception:
@@ -86,20 +91,29 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
         )
         core_titles = [h["_source"]["title"].lower() for h in res_core.get("hits", {}).get("hits", []) if "title" in h.get("_source", {})]
 
+        DESCRIPTOR_MODIFIERS = {
+            "air", "pro", "max", "mini", "ultra", "plus", "lite", "smart", "prime", "neo",
+            "super", "active", "style", "pack", "combo", "inch", "inches", "black", "white",
+            "blue", "red", "color", "colors", "dual", "quad", "true", "new", "top", "best"
+        }
+
         before_for = Counter()
         after_for = Counter()
         for t in acc_titles:
             parts = re.split(r'\b(?:for|compatible with|suitable for|fit for|designed for|fit with|fits)\b', t, maxsplit=1)
             if len(parts) == 2:
-                for w in set(re.findall(r'[a-z]{3,}', parts[0])):
-                    if w not in STOPWORDS:
-                        before_for[w] += 1
+                words_before = [w for w in re.findall(r'[a-z]{3,}', parts[0]) if w not in STOPWORDS]
+                if words_before:
+                    for hw in words_before[-2:]:
+                        if hw not in DESCRIPTOR_MODIFIERS:
+                            before_for[hw] += 1
                 for w in set(re.findall(r'[a-z]{3,}', parts[1])):
                     if w not in STOPWORDS:
                         after_for[w] += 1
             else:
-                for w in re.findall(r'\b(?:sleeve|sleeves|sticker|stickers|decal|decals|skin|skins|wrap|wraps|stand|stands|mat|mats|tray|trays|guide|manual|book|books)\b', t):
-                    before_for[w] += 2
+                for w in set(re.findall(r'[a-z]{3,}', t)):
+                    if w not in STOPWORDS and w not in DESCRIPTOR_MODIFIERS:
+                        before_for[w] += 1
 
         core_counts = Counter()
         for t in core_titles:
@@ -110,8 +124,8 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
         n_acc = max(len(acc_titles), 1)
         n_core = max(len(core_titles), 1)
 
-        # Host devices predominantly follow 'for' (ratio of after / before >= 2.0)
-        host_devices = {w for w, caft in after_for.items() if caft >= 3 and (caft / (before_for.get(w, 0) + 1)) >= 2.0}
+        # Host devices predominantly follow 'for' (ratio of after / before >= 1.8)
+        host_devices = {w for w, caft in after_for.items() if caft >= 3 and (caft / (before_for.get(w, 0) + 1)) >= 1.8}
         for hd in list(host_devices):
             host_devices.update(get_word_variants(hd))
 
@@ -121,8 +135,8 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
             known_core.update(get_word_variants(cw))
 
         candidates = []
-        for w, cbef in before_for.most_common(300):
-            if cbef >= 2 and w not in host_devices and w not in known_core and len(w) >= 3:
+        for w, cbef in before_for.most_common(350):
+            if cbef >= 3 and w not in host_devices and w not in known_core and w not in DESCRIPTOR_MODIFIERS and len(w) >= 3:
                 cc = core_counts.get(w, 0)
                 odds = (cbef / n_acc) / ((cc + 0.5) / n_core)
                 prep_ratio = cbef / (after_for.get(w, 0) + 1)
@@ -133,7 +147,7 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
         seen = set()
         for w in candidates:
             for v in get_word_variants(w):
-                if v not in host_devices and v not in known_core and v not in seen:
+                if v not in host_devices and v not in known_core and v not in DESCRIPTOR_MODIFIERS and v not in seen:
                     seen.add(v)
                     ordered_learned.append(v)
 

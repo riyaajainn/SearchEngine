@@ -366,7 +366,9 @@ def post_process_search_hits(
     unwanted_acc: list,
     effective_subcat: str,
     detected_demo: str,
-    limit: int
+    limit: int,
+    is_core_hardware: bool = False,
+    effective_max_p: float = None
 ) -> list:
     """Filter, disambiguate, and attach metadata to raw search hits."""
     filtered_hits = []
@@ -422,6 +424,14 @@ def post_process_search_hits(
             # Multi-model compatibility stuffing check
             if is_compatibility_stuffed(t_lower, q_tokens):
                 continue
+
+            # Statistical Price Sanity for Core Hardware:
+            # Genuine hardware (laptops, phones, refrigerators, TVs) never costs < ₹1,000.
+            # Low-cost items listed under hardware are misclassified marketplace accessories/skins/guards.
+            if is_core_hardware and effective_max_p is None:
+                p_val = src.get("price")
+                if p_val is not None and float(p_val) < 1000:
+                    continue
 
             sub_demo = subcat_info.get("demographic")
             if detected_demo and sub_demo and sub_demo != detected_demo:
@@ -577,6 +587,8 @@ def search_products(
         effective_subcat=effective_subcat,
         detected_demo=detected_demo,
         limit=limit,
+        is_core_hardware=is_core_hardware,
+        effective_max_p=effective_max_p,
     )
 
     normalize_scores_and_badges(filtered_hits, clean_q)
