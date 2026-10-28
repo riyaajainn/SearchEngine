@@ -145,13 +145,13 @@ def build_taxonomy(source, index_name: str = "products-v1") -> tuple:
             "size": 0,
             "aggs": {
                 "categories": {
-                    "terms": {"field": "category.keyword", "size": 100},
+                    "terms": {"field": "category.raw", "size": 100},
                     "aggs": {
                         "cat_names": {
                             "terms": {"field": "category_name.raw", "size": 1},
                             "aggs": {
                                 "subcategories": {
-                                    "terms": {"field": "sub_cat_id.keyword", "size": 200},
+                                    "terms": {"field": "sub_cat_id", "size": 200},
                                     "aggs": {
                                         "sub_names": {
                                             "terms": {"field": "subcategory_name.raw", "size": 1}

@@ -1,3 +1,6 @@
+from nlp_utils import get_word_variants
+
+
 def build_search_query_dsl(
     clean_q: str,
     q_tokens: list,
@@ -21,10 +24,22 @@ def build_search_query_dsl(
     should_clauses = []
     negative_clauses = []
 
-    # 1. Must Clause: query_string with AND operator
+    # 1. Must Clause: query_string with synonym-expanded AND operator
+    query_parts = []
+    for t in q_tokens:
+        variants = get_word_variants(t)
+        expanded_variants = {v for v in variants if len(v) >= 2}
+        if len(expanded_variants) > 1 and any(v != t for v in expanded_variants):
+            var_terms = [f'"{v}"' if " " in v else v for v in sorted(expanded_variants, key=len)]
+            query_parts.append(f"({' OR '.join(var_terms)})")
+        else:
+            query_parts.append(t)
+
+    query_str_val = " AND ".join(query_parts) if query_parts else clean_q
+
     must_clauses.append({
         "query_string": {
-            "query": clean_q,
+            "query": query_str_val,
             "default_operator": "AND",
             "fields": ["title^5", "title.raw^10"]
         }
@@ -62,7 +77,7 @@ def build_search_query_dsl(
         should_clauses.append({"match_phrase": {"title": {"query": core_query, "boost": 8.0}}})
 
     if target_subcat:
-        should_clauses.append({"term": {"sub_cat_id": {"value": target_subcat, "boost": 4.0}}})
+        should_clauses.append({"term": {"sub_cat_id": {"value": target_subcat, "boost": 25.0}}})
 
     if detected_demo:
         should_clauses.append({"match": {"title": {"query": detected_demo, "boost": 3.0}}})
@@ -80,6 +95,17 @@ def build_search_query_dsl(
         negative_clauses.append({"match_phrase": {"title": f"compatible with {target_term}"}})
         negative_clauses.append({"match_phrase": {"title": f"suitable for {target_term}"}})
         negative_clauses.append({"match_phrase": {"title": f"designed for {target_term}"}})
+        negative_clauses.append({"match": {"title": "compatible suitable fit"}})
+
+        # Demote accessory parts and decorative stickers when user didn't ask for them
+        accessory_nouns = {
+            "sticker", "stickers", "decal", "decals", "cover", "covers", "stand", "stands",
+            "handle", "handles", "tray", "trays", "shelf", "shelves", "motor", "timer",
+            "mat", "mats", "pipe", "pipes", "hose", "hoses", "filter", "filters"
+        }
+        unasked_accessories = [w for w in accessory_nouns if w not in q_tokens]
+        if unasked_accessories:
+            negative_clauses.append({"match": {"title": {"query": " ".join(unasked_accessories), "boost": 5.0}}})
 
         if q_tokens:
             negative_clauses.append({
