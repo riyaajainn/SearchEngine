@@ -97,13 +97,15 @@ def build_search_query_dsl(
         negative_clauses.append({"match_phrase": {"title": f"designed for {target_term}"}})
         negative_clauses.append({"match": {"title": "compatible suitable fit"}})
 
-        # Demote accessory parts, batteries, chargers, and decorative stickers when user didn't ask for them
+        # Demote accessory parts, batteries, chargers, bags, and decorative covers when user didn't ask for them
         accessory_nouns = {
             "sticker", "stickers", "decal", "decals", "cover", "covers", "stand", "stands",
             "handle", "handles", "tray", "trays", "shelf", "shelves", "motor", "timer",
             "mat", "mats", "pipe", "pipes", "hose", "hoses", "filter", "filters",
             "battery", "batteries", "adapter", "adapters", "charger", "chargers",
-            "cable", "cables", "keyboard", "keyboards", "pass", "case", "cases"
+            "cable", "cables", "keyboard", "keyboards", "pass", "case", "cases",
+            "sleeve", "sleeves", "attache", "skin", "skins", "pouch", "pouches",
+            "bag", "bags", "backpack", "backpacks", "book", "books", "guide"
         }
         unasked_accessories = [w for w in accessory_nouns if w not in q_tokens]
         if unasked_accessories:

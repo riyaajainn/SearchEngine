@@ -205,6 +205,26 @@ def build_taxonomy(source, index_name: str = "products-v1") -> tuple:
         for t in list(core_tokens):
             core_tokens.update(get_word_variants(t))
 
+        # Standard hardware device family mappings
+        if "laptop" in raw_sub:
+            core_tokens.update({"macbook", "macbooks", "chromebook", "chromebooks", "notebook", "notebooks"})
+            all_tokens.update({"macbook", "macbooks", "chromebook", "chromebooks", "notebook", "notebooks"})
+        elif "mobile" in raw_sub or "phone" in raw_sub:
+            core_tokens.update({"iphone", "iphones", "smartphone", "smartphones"})
+            all_tokens.update({"iphone", "iphones", "smartphone", "smartphones"})
+        elif "tablet" in raw_sub:
+            core_tokens.update({"ipad", "ipads"})
+            all_tokens.update({"ipad", "ipads"})
+        elif "refrigerator" in raw_sub:
+            core_tokens.update({"fridge", "fridges"})
+            all_tokens.update({"fridge", "fridges"})
+        elif "television" in raw_sub or "tv" in raw_sub:
+            core_tokens.update({"tv", "tvs", "television", "televisions"})
+            all_tokens.update({"tv", "tvs", "television", "televisions"})
+        elif "air conditioner" in raw_sub:
+            core_tokens.update({"ac", "acs"})
+            all_tokens.update({"ac", "acs"})
+
         detected_demo, _ = extract_demographic(sub_name)
 
         is_acc = (
