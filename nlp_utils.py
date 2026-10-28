@@ -9,6 +9,30 @@ RE_TOKENS = re.compile(r'[a-z0-9]+', re.I)
 RE_COMPATIBLE = re.compile(r'\b(?:for|compatible with|compatible for|compatible|compitable with|compitable|suitable for|suitable|fit for|fit with|fits|designed for)\b', re.I)
 STORAGE_PATTERN = re.compile(r'\b(?:\d+\s*(?:gb|tb|mb)|\d{2,4}\s*gb)\b', re.I)
 
+# Universal product derivative terms (parts, components, protection, peripherals, accessories)
+UNIVERSAL_DERIVATIVE_TERMS = frozenset({
+    # Power, charging & connectivity
+    "battery", "batteries", "charger", "chargers", "adapter", "adapters", "cable", "cables",
+    "cord", "cords", "wire", "wires", "connector", "connectors", "plug", "plugs", "jack", "jacks",
+    # Protection, cases & skins
+    "case", "cases", "cover", "covers", "skin", "skins", "guard", "guards", "glass", "glasses",
+    "tempered", "protector", "protectors", "film", "films", "shield", "shields", "sleeve", "sleeves",
+    "pouch", "pouches", "bag", "bags", "sticker", "stickers", "decal", "decals", "wrap", "wraps",
+    # Mounting, stands & holding
+    "stand", "stands", "holder", "holders", "mount", "mounts", "bracket", "brackets", "tripod", "tripods",
+    "dock", "docks", "cradle", "cradles", "strap", "straps", "band", "bands", "clip", "clips", "hook", "hooks",
+    # Replacement parts, spares & internal components
+    "replacement", "replacements", "spare", "spares", "part", "parts", "fan", "fans", "hinge", "hinges",
+    "keycap", "keycaps", "motherboard", "motherboards", "bezel", "bezels", "housing", "casing",
+    "screw", "screws", "filter", "filters", "cartridge", "cartridges", "toner", "toners", "ink", "inks",
+    # Automotive / vehicle parts
+    "headlight", "headlights", "horn", "horns", "lamp", "lamps", "bulb", "bulbs", "mirror", "mirrors",
+    "bumper", "bumpers", "mudguard", "mudguards", "reflector", "reflectors",
+    # Manuals / books / tutorials
+    "manual", "manuals", "guide", "guides", "tutorial", "tutorials", "handbook", "handbooks", "book", "books",
+    "teach", "training", "course", "courses"
+})
+
 PRICE_PATTERNS = [
     re.compile(r'\b(?:between|from)\s+(?:rs\.?|inr|₹)?\s*(\d+)\s*(?:and|to|-)\s*(?:rs\.?|inr|₹)?\s*(\d+)\b', re.I),
     re.compile(r'\b(?:rs\.?|inr|₹)?\s*(\d+)\s*(?:to|-)\s*(?:rs\.?|inr|₹)?\s*(\d+)\b', re.I),

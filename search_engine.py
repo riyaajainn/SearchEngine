@@ -6,6 +6,7 @@ from nlp_utils import (
     STOPWORDS,
     RE_TOKENS,
     RE_COMPATIBLE,
+    UNIVERSAL_DERIVATIVE_TERMS,
     clean_and_normalize_text,
     clean_title,
     get_word_variants,
@@ -49,8 +50,14 @@ def build_taxonomy(source, index_name: str = OPENSEARCH_INDEX) -> tuple:
         acc_kw, discovered_hosts = mine_accessory_vocabulary(
             source, index_name=index_name, core_device_words=DYNAMIC_CORE_DEVICE_WORDS
         )
+        all_derivatives = []
+        seen = set()
+        for w in list(acc_kw) + list(UNIVERSAL_DERIVATIVE_TERMS):
+            if w not in discovered_hosts and w not in seen:
+                seen.add(w)
+                all_derivatives.append(w)
         DYNAMIC_ACCESSORY_KEYWORDS.clear()
-        DYNAMIC_ACCESSORY_KEYWORDS.extend(acc_kw)
+        DYNAMIC_ACCESSORY_KEYWORDS.extend(all_derivatives)
         DYNAMIC_CORE_DEVICE_WORDS.update(discovered_hosts)
         TRUE_ACCESSORY_TOKENS = DYNAMIC_ACCESSORY_KEYWORDS
 
