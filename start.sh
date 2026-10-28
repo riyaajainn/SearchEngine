@@ -4,9 +4,6 @@ set -e
 # Use Render assigned PORT or default to 8501
 PORT="${PORT:-8501}"
 
-echo "Starting Autocomplete Microservice in background..."
-python autocomplete_service.py &
-
 echo "Starting Streamlit UI on port $PORT..."
 exec streamlit run app.py \
     --server.port "$PORT" \

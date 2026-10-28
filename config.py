@@ -18,7 +18,7 @@ OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "products-v1")
 
 # Autocomplete Configuration
 AUTOCOMPLETE_HOST = os.getenv("AUTOCOMPLETE_HOST", "127.0.0.1")
-AUTOCOMPLETE_PORT = int(os.getenv("AUTOCOMPLETE_PORT", os.getenv("PORT", "8503")))
+AUTOCOMPLETE_PORT = int(os.getenv("AUTOCOMPLETE_PORT", "8503"))
 AUTOCOMPLETE_ENDPOINT_URL = os.getenv("AUTOCOMPLETE_ENDPOINT_URL", f"http://127.0.0.1:{AUTOCOMPLETE_PORT}/autocomplete")
 
 
