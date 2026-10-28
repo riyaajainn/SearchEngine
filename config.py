@@ -7,25 +7,26 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 load_dotenv()
 
 # OpenSearch Cluster Configuration
-OPENSEARCH_URL = os.getenv("OPENSEARCH_URL")
-OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
-OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
-OPENSEARCH_USER = os.getenv("OPENSEARCH_USER")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() in ("true", "1", "yes")
-OPENSEARCH_VERIFY_CERTS = os.getenv("OPENSEARCH_VERIFY_CERTS", "true").lower() in ("true", "1", "yes")
-OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "products-v1")
+OPENSEARCH_URL = os.getenv("OPENSEARCH_URL", "").strip() or None
+OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost").strip()
+OPENSEARCH_PORT = int(str(os.getenv("OPENSEARCH_PORT", "9200")).strip())
+OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "").strip() or None
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "").strip() or None
+OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").strip().lower() in ("true", "1", "yes")
+OPENSEARCH_VERIFY_CERTS = os.getenv("OPENSEARCH_VERIFY_CERTS", "true").strip().lower() in ("true", "1", "yes")
+OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "products-v1").strip()
 
 # Autocomplete Configuration
-AUTOCOMPLETE_HOST = os.getenv("AUTOCOMPLETE_HOST", "127.0.0.1")
-AUTOCOMPLETE_PORT = int(os.getenv("AUTOCOMPLETE_PORT", "8503"))
-AUTOCOMPLETE_ENDPOINT_URL = os.getenv("AUTOCOMPLETE_ENDPOINT_URL", f"http://127.0.0.1:{AUTOCOMPLETE_PORT}/autocomplete")
+AUTOCOMPLETE_HOST = os.getenv("AUTOCOMPLETE_HOST", "127.0.0.1").strip()
+AUTOCOMPLETE_PORT = int(str(os.getenv("AUTOCOMPLETE_PORT", "8503")).strip())
+AUTOCOMPLETE_ENDPOINT_URL = os.getenv("AUTOCOMPLETE_ENDPOINT_URL", f"http://127.0.0.1:{AUTOCOMPLETE_PORT}/autocomplete").strip()
 
 # MongoDB Configuration
-MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "mongodb://read_only:v%3F8lT%21sw%26pu4ec2zaPra@143.110.184.59:27017/?authMechanism=DEFAULT"
-MONGO_DB = os.getenv("MONGO_DB", "fs_graph")
-MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "price_graph")
-IMAGE_URL_FIELD = os.getenv("IMAGE_URL_FIELD", "imgurl")
+_raw_mongo = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "mongodb://read_only:v%3F8lT%21sw%26pu4ec2zaPra@143.110.184.59:27017/?authMechanism=DEFAULT"
+MONGO_URI = _raw_mongo.strip()
+MONGO_DB = os.getenv("MONGO_DB", "fs_graph").strip()
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "price_graph").strip()
+IMAGE_URL_FIELD = os.getenv("IMAGE_URL_FIELD", "imgurl").strip()
 
 # Store Slugs and Display Names
 STORE_SLUGS = {
