@@ -516,7 +516,7 @@ def search_products(
 
     unwanted_acc = []
     if not is_accessory_intent:
-        for acc in list(DYNAMIC_ACCESSORY_KEYWORDS)[:60]:
+        for acc in list(DYNAMIC_ACCESSORY_KEYWORDS):
             if acc not in q_tokens and len(acc) >= 3:
                 unwanted_acc.append(acc)
 
