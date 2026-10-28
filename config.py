@@ -21,6 +21,37 @@ AUTOCOMPLETE_HOST = os.getenv("AUTOCOMPLETE_HOST", "127.0.0.1")
 AUTOCOMPLETE_PORT = int(os.getenv("AUTOCOMPLETE_PORT", "8503"))
 AUTOCOMPLETE_ENDPOINT_URL = os.getenv("AUTOCOMPLETE_ENDPOINT_URL", f"http://127.0.0.1:{AUTOCOMPLETE_PORT}/autocomplete")
 
+# MongoDB Configuration
+MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "mongodb://read_only:v%3F8lT%21sw%26pu4ec2zaPra@143.110.184.59:27017/?authMechanism=DEFAULT"
+MONGO_DB = os.getenv("MONGO_DB", "fs_graph")
+MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "price_graph")
+IMAGE_URL_FIELD = os.getenv("IMAGE_URL_FIELD", "imgurl")
+
+# Store Slugs and Display Names
+STORE_SLUGS = {
+    "1": "flipkart",
+    "2": "amazon",
+    "22": "amazon",
+    "5": "jiomart",
+    "6": "tatacliq",
+    "7": "myntra",
+    "9": "ajio",
+    "13": "croma",
+    "14": "reliancedigital",
+}
+
+STORE_DISPLAY_NAMES = {
+    "1": "Flipkart",
+    "2": "Amazon",
+    "22": "Amazon",
+    "5": "JioMart",
+    "6": "Tata CLiQ",
+    "7": "Myntra",
+    "9": "Ajio",
+    "13": "Croma",
+    "14": "Reliance Digital",
+}
+
 
 def get_opensearch_client(timeout: int = 10, max_retries: int = 2) -> OpenSearch:
     """

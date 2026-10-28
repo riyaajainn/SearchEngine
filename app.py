@@ -29,6 +29,7 @@ from config import (
     IMAGE_URL_FIELD,
     STORE_SLUGS,
     STORE_DISPLAY_NAMES,
+    get_opensearch_client,
 )
 
 # ---------------- Live Google-Style Autocomplete Service ----------------
@@ -113,25 +114,19 @@ st.set_page_config(
 
 @st.cache_resource
 def get_clients():
-    if not MONGO_URI:
-        raise ValueError("MONGO_URI or MONGODB_URI is missing from your .env file.")
+    os_client = get_opensearch_client(timeout=30)
+    collection = None
+    if MONGO_URI:
+        try:
+            mongo_client = MongoClient(
+                MONGO_URI,
+                serverSelectionTimeoutMS=5000,
+            )
+            mongo_client.admin.command("ping")
+            collection = mongo_client[MONGO_DB][MONGO_COLLECTION]
+        except Exception:
+            collection = None
 
-    os_client = OpenSearch(
-        hosts=[{"host": OS_HOST, "port": OS_PORT}],
-        use_ssl=False,
-        verify_certs=False,
-        timeout=30,
-        max_retries=2,
-        retry_on_timeout=True,
-    )
-
-    mongo_client = MongoClient(
-        MONGO_URI,
-        serverSelectionTimeoutMS=10000,
-    )
-    mongo_client.admin.command("ping")
-
-    collection = mongo_client[MONGO_DB][MONGO_COLLECTION]
     return os_client, collection
 
 
