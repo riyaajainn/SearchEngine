@@ -20,6 +20,10 @@ OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "products-v1").strip()
 AUTOCOMPLETE_HOST = os.getenv("AUTOCOMPLETE_HOST", "127.0.0.1").strip()
 AUTOCOMPLETE_PORT = int(str(os.getenv("AUTOCOMPLETE_PORT", "8503")).strip())
 AUTOCOMPLETE_ENDPOINT_URL = os.getenv("AUTOCOMPLETE_ENDPOINT_URL", f"http://127.0.0.1:{AUTOCOMPLETE_PORT}/autocomplete").strip()
+AMAZON_SUGGESTIONS_URL = os.getenv(
+    "AMAZON_SUGGESTIONS_URL",
+    "https://www.amazon.in/suggestions?limit=11&suggestion-type=WIDGET&suggestion-type=KEYWORD&page-type=Gateway&alias=aps&site-variant=desktop&version=3&event=onkeypress&wc=&lop=en_IN&fb=1&mid=A21TJRUUN4KGV&prefix="
+).strip()
 
 # MongoDB Configuration
 _raw_mongo = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "mongodb://read_only:v%3F8lT%21sw%26pu4ec2zaPra@143.110.184.59:27017/?authMechanism=DEFAULT"

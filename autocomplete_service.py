@@ -1,6 +1,8 @@
 import json
 import re
 import urllib.parse
+import urllib.request
+from functools import lru_cache
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -8,6 +10,7 @@ from config import (
     OPENSEARCH_INDEX,
     AUTOCOMPLETE_HOST,
     AUTOCOMPLETE_PORT,
+    AMAZON_SUGGESTIONS_URL,
     get_opensearch_client,
 )
 from nlp_utils import (
@@ -134,6 +137,67 @@ def query_opensearch_suggestions(q: str, size: int = 8) -> list:
     return suggestions
 
 
+@lru_cache(maxsize=2048)
+def fetch_amazon_suggestions(q: str, limit: int = 10) -> tuple:
+    """
+    Fetch real-time live e-commerce search queries from Amazon India's predictive typeahead endpoint.
+    Fast, highly relevant, with zero static word dictionaries.
+    """
+    if not q or len(q.strip()) < 2:
+        return ()
+    prefix = q.strip().lower()
+    url = f"{AMAZON_SUGGESTIONS_URL}{urllib.parse.quote(prefix)}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=1.8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            sugs = []
+            for s in data.get("suggestions", []):
+                val = s.get("value", "").strip()
+                if val:
+                    val_clean = re.sub(r'\s+', ' ', val)
+                    if val_clean.lower() not in [x.lower() for x in sugs]:
+                        sugs.append(val_clean)
+            return tuple(sugs[:limit])
+    except Exception:
+        return ()
+
+
+def get_live_suggestions(q: str, size: int = 8) -> list:
+    """
+    Blended live autocomplete provider:
+    1. Fetches real-time search trends and product queries from Amazon Suggestions API.
+    2. Merges with local OpenSearch catalog suggestions for maximum catalog alignment.
+    3. De-duplicates and ranks by e-commerce relevance.
+    """
+    raw_q = q.strip()
+    if len(raw_q) < 2:
+        return []
+
+    # 1. Fetch live Amazon suggestions (fast, high relevance, < 1ms when cached)
+    amz_sugs = list(fetch_amazon_suggestions(raw_q, limit=size))
+
+    # 2. Supplement or fallback to OpenSearch cluster suggestions
+    os_sugs = query_opensearch_suggestions(raw_q, size=size)
+
+    combined = []
+    seen = set()
+    for s in amz_sugs + os_sugs:
+        s_low = s.lower().strip()
+        if s_low and s_low not in seen:
+            seen.add(s_low)
+            combined.append(s)
+            if len(combined) >= size:
+                break
+    return combined
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -155,9 +219,9 @@ class AutocompleteHandler(BaseHTTPRequestHandler):
                 import autocomplete_service
                 import importlib
                 importlib.reload(autocomplete_service)
-                sugs = autocomplete_service.query_opensearch_suggestions(q, size=8)
+                sugs = autocomplete_service.get_live_suggestions(q, size=8)
             except Exception:
-                sugs = query_opensearch_suggestions(q, size=8)
+                sugs = get_live_suggestions(q, size=8)
 
             data = json.dumps(sugs).encode("utf-8")
             self.send_response(200)
