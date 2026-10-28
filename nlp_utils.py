@@ -6,7 +6,7 @@ STOPWORDS = frozenset(ENGLISH_STOP_WORDS).union({"under", "below", "above", "bet
 
 # Precompiled common structural regexes
 RE_TOKENS = re.compile(r'[a-z0-9]+', re.I)
-RE_COMPATIBLE = re.compile(r'\b(?:for|compatible with|compatible for|suitable for|fit for|designed for)\b', re.I)
+RE_COMPATIBLE = re.compile(r'\b(?:for|compatible with|compatible for|compatible|compitable with|compitable|suitable for|suitable|fit for|fit with|fits|designed for)\b', re.I)
 STORAGE_PATTERN = re.compile(r'\b(?:\d+\s*(?:gb|tb|mb)|\d{2,4}\s*gb)\b', re.I)
 
 PRICE_PATTERNS = [

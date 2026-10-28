@@ -24,7 +24,7 @@ from query_builder import build_search_query_dsl
 
 # Dynamic active runtime vocabularies mined directly from OpenSearch cluster
 DYNAMIC_CORE_DEVICE_WORDS = set()
-DYNAMIC_ACCESSORY_KEYWORDS = set()
+DYNAMIC_ACCESSORY_KEYWORDS = []
 
 # Backward-compatible references
 CORE_DEVICE_AND_SPEC_WORDS = DYNAMIC_CORE_DEVICE_WORDS
@@ -42,30 +42,87 @@ def build_taxonomy(source, index_name: str = OPENSEARCH_INDEX) -> tuple:
     taxonomy, subcat_index = learner_build_taxonomy(source, index_name=index_name)
 
     if hasattr(source, "search"):
-        DYNAMIC_CORE_DEVICE_WORDS = mine_core_device_vocabulary(source, index_name=index_name)
+        core_voc = mine_core_device_vocabulary(source, index_name=index_name)
+        DYNAMIC_CORE_DEVICE_WORDS.clear()
+        DYNAMIC_CORE_DEVICE_WORDS.update(core_voc)
         CORE_DEVICE_AND_SPEC_WORDS = DYNAMIC_CORE_DEVICE_WORDS
-        DYNAMIC_ACCESSORY_KEYWORDS, discovered_hosts = mine_accessory_vocabulary(
+        acc_kw, discovered_hosts = mine_accessory_vocabulary(
             source, index_name=index_name, core_device_words=DYNAMIC_CORE_DEVICE_WORDS
         )
+        DYNAMIC_ACCESSORY_KEYWORDS.clear()
+        DYNAMIC_ACCESSORY_KEYWORDS.extend(acc_kw)
         DYNAMIC_CORE_DEVICE_WORDS.update(discovered_hosts)
         TRUE_ACCESSORY_TOKENS = DYNAMIC_ACCESSORY_KEYWORDS
 
     return taxonomy, subcat_index
 
 
-def classify_query_intent(query_str: str, accessory_vocab: set = None) -> str:
+def classify_query_intent(query_str: str, accessory_vocab=None) -> str:
     """Classify user query intent into 'ACCESSORY' vs 'CORE_PRODUCT'."""
     q_low = query_str.lower()
     if RE_COMPATIBLE.search(q_low):
         return "ACCESSORY"
-    vocab = accessory_vocab if accessory_vocab is not None else DYNAMIC_ACCESSORY_KEYWORDS
+    vocab = set(accessory_vocab if accessory_vocab is not None else DYNAMIC_ACCESSORY_KEYWORDS)
     tokens = set(RE_TOKENS.findall(q_low))
     if tokens.intersection(vocab):
         return "ACCESSORY"
     return "CORE_PRODUCT"
 
 
-def resolve_query_intent(query_str: str, taxonomy_index: list) -> dict:
+def resolve_subcat_from_catalog(os_client, clean_q: str, q_tokens: list, index_name: str = OPENSEARCH_INDEX) -> str:
+    """
+    Dynamically finds the most relevant primary subcategory for brand/model queries
+    by querying OpenSearch aggregations while suppressing accessory noise.
+    Zero hardcoded dictionaries.
+    """
+    if not hasattr(os_client, "search") or not q_tokens:
+        return None
+    try:
+        must_not_clauses = [
+            {"wildcard": {"subcategory_name.raw": "*accessori*"}},
+            {"wildcard": {"subcategory_name.raw": "*decor*"}},
+            {"wildcard": {"subcategory_name.raw": "*furnish*"}},
+            {"wildcard": {"subcategory_name.raw": "*bag*"}},
+        ]
+        for t in q_tokens[:3]:
+            must_not_clauses.append({"match_phrase": {"title": f"for {t}"}})
+            must_not_clauses.append({"match_phrase": {"title": f"compatible with {t}"}})
+            must_not_clauses.append({
+                "span_near": {
+                    "clauses": [
+                        {"span_term": {"title": "for"}},
+                        {"span_term": {"title": t}}
+                    ],
+                    "slop": 4,
+                    "in_order": True
+                }
+            })
+        body = {
+            "size": 0,
+            "query": {
+                "bool": {
+                    "must": [{"match": {"title": {"query": clean_q, "operator": "and"}}}],
+                    "must_not": must_not_clauses
+                }
+            },
+            "aggs": {
+                "top_subs": {"terms": {"field": "sub_cat_id", "size": 5}}
+            }
+        }
+        res = os_client.search(index=index_name, body=body)
+        buckets = res.get("aggregations", {}).get("top_subs", {}).get("buckets", [])
+        for b in buckets:
+            sid = str(b["key"])
+            if sid not in ("1401",):  # Skip generic 'Others'
+                return sid
+        if buckets:
+            return str(buckets[0]["key"])
+    except Exception:
+        pass
+    return None
+
+
+def resolve_query_intent(query_str: str, taxonomy_index: list, os_client=None, index_name: str = OPENSEARCH_INDEX, taxonomy: dict = None) -> dict:
     """Map natural language user query to target category & residual query dynamically."""
     cleaned = clean_and_normalize_text(query_str)
     raw_tokens = RE_TOKENS.findall(cleaned)
@@ -124,6 +181,14 @@ def resolve_query_intent(query_str: str, taxonomy_index: list) -> dict:
             nt_variants = get_word_variants(nt)
             if nt_variants.intersection(best_match["core_tokens"]) or raw_tokens[i] in demo_tokens:
                 matched_q_tokens.add(raw_tokens[i])
+    elif os_client and intent_type == "CORE_PRODUCT":
+        # Dynamic discovery from live catalog distributions for brand / model queries
+        discovered_sub = resolve_subcat_from_catalog(os_client, cleaned, list(content_tokens), index_name=index_name)
+        if discovered_sub:
+            target_subcat = discovered_sub
+            if taxonomy and discovered_sub in taxonomy:
+                target_subcat_name = taxonomy[discovered_sub].get("sub_cat_name")
+            best_score = 25
 
     residual_tokens = [t for t in raw_tokens if t not in matched_q_tokens and t not in STOPWORDS]
     residual_query = " ".join(residual_tokens).strip()
@@ -307,8 +372,8 @@ def post_process_search_hits(
     filtered_hits = []
 
     if is_accessory_intent:
-        acc_title_tokens = DYNAMIC_ACCESSORY_KEYWORDS
-        q_acc_tokens = {t for t in q_tokens if t in DYNAMIC_ACCESSORY_KEYWORDS}
+        acc_title_tokens = set(DYNAMIC_ACCESSORY_KEYWORDS)
+        q_acc_tokens = {t for t in q_tokens if t in acc_title_tokens}
 
         for hit in raw_hits:
             src = hit.get("_source", {})
@@ -325,7 +390,7 @@ def post_process_search_hits(
 
             if q_acc_tokens and re.search(r'\b(?:for|with)\b', t_lower):
                 prefix_words = set(re.split(r'\b(?:for|with)\b', t_lower)[0].split())
-                if prefix_words.intersection(DYNAMIC_ACCESSORY_KEYWORDS - q_acc_tokens):
+                if prefix_words.intersection(acc_title_tokens - q_acc_tokens):
                     continue
 
             if re.search(r'\b(?:for|compatible with|suitable for)\b', t_lower) or t_words.intersection(acc_title_tokens):
@@ -420,7 +485,7 @@ def search_products(
 
     if taxonomy_index is None:
         taxonomy_index = list(taxonomy.values())
-    intent = resolve_query_intent(clean_q, taxonomy_index)
+    intent = resolve_query_intent(clean_q, taxonomy_index, os_client=os_client, index_name=index_name, taxonomy=taxonomy)
     core_query = intent.get("residual_query", "")
     target_subcat = intent.get("target_subcat")
     detected_demo = intent.get("detected_demo")
@@ -437,11 +502,11 @@ def search_products(
     if target_subcat_info.get("is_accessory", False):
         is_accessory_intent = True
 
-    effective_subcat = target_subcat if (target_subcat_info.get("is_accessory", False) or intent.get("best_score", 0) >= 18) else None
+    effective_subcat = target_subcat if (target_subcat_info.get("is_accessory", False) or intent.get("best_score", 0) >= 8) else None
 
     unwanted_acc = []
     if not is_accessory_intent:
-        for acc in DYNAMIC_ACCESSORY_KEYWORDS:
+        for acc in list(DYNAMIC_ACCESSORY_KEYWORDS)[:60]:
             if acc not in q_tokens and len(acc) >= 3:
                 unwanted_acc.append(acc)
 
@@ -468,9 +533,8 @@ def search_products(
     elif sort_by == "Price: High to Low":
         sort_criteria = [{"price": {"order": "desc"}}, "_score"]
 
-    fetch_multiplier = 4 if group_by_same_title else 3
     body = {
-        "size": max(limit * fetch_multiplier, 30),
+        "size": max(limit * 8, 80),
         "query": final_query,
         "sort": sort_criteria,
         "highlight": {

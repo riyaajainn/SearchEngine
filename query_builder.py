@@ -91,34 +91,18 @@ def build_search_query_dsl(
             negative_clauses.append({"terms": {"sub_cat_id": accessory_subcats}})
 
         target_term = core_query or clean_q
-        negative_clauses.append({"match_phrase": {"title": f"for {target_term}"}})
-        negative_clauses.append({"match_phrase": {"title": f"compatible with {target_term}"}})
-        negative_clauses.append({"match_phrase": {"title": f"suitable for {target_term}"}})
-        negative_clauses.append({"match_phrase": {"title": f"designed for {target_term}"}})
-        negative_clauses.append({"match": {"title": "compatible suitable fit"}})
+        for prep in ("for", "compatible with", "suitable for", "designed for", "fit for", "fit with", "fits"):
+            negative_clauses.append({"match_phrase": {"title": f"{prep} {target_term}"}})
 
-        # Demote accessory parts, batteries, chargers, bags, and decorative covers when user didn't ask for them
-        accessory_nouns = {
-            "sticker", "stickers", "decal", "decals", "cover", "covers", "stand", "stands",
-            "handle", "handles", "tray", "trays", "shelf", "shelves", "motor", "timer",
-            "mat", "mats", "pipe", "pipes", "hose", "hoses", "filter", "filters",
-            "battery", "batteries", "adapter", "adapters", "charger", "chargers",
-            "cable", "cables", "keyboard", "keyboards", "pass", "case", "cases",
-            "sleeve", "sleeves", "attache", "skin", "skins", "pouch", "pouches",
-            "bag", "bags", "backpack", "backpacks", "book", "books", "guide"
-        }
-        unasked_accessories = [w for w in accessory_nouns if w not in q_tokens]
-        if unasked_accessories:
-            negative_clauses.append({"match": {"title": {"query": " ".join(unasked_accessories), "boost": 5.0}}})
-
-        if q_tokens:
+        for t in q_tokens[:3]:
+            negative_clauses.append({"match_phrase": {"title": f"for {t}"}})
             negative_clauses.append({
                 "span_near": {
                     "clauses": [
                         {"span_term": {"title": "for"}},
-                        {"span_term": {"title": q_tokens[0]}}
+                        {"span_term": {"title": t}}
                     ],
-                    "slop": 3,
+                    "slop": 4,
                     "in_order": True
                 }
             })
@@ -128,7 +112,7 @@ def build_search_query_dsl(
                 "match": {
                     "title": {
                         "query": " ".join(unwanted_acc),
-                        "boost": 4.0,
+                        "boost": 5.0,
                     }
                 }
             })

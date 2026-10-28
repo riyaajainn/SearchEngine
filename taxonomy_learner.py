@@ -10,7 +10,7 @@ from nlp_utils import (
 
 def mine_core_device_vocabulary(os_client, index_name: str = "products-v1") -> set:
     """
-    Dynamically mines core product nouns from non-accessory subcategories across OpenSearch.
+    Dynamically mines core product nouns and brand/model terms from non-accessory subcategories across OpenSearch.
     Zero hardcoded dictionaries.
     """
     learned = set()
@@ -28,7 +28,7 @@ def mine_core_device_vocabulary(os_client, index_name: str = "products-v1") -> s
             sc = b["key"].lower()
             if "accessor" not in sc:
                 for w in re.findall(r'[a-z]{2,}', sc):
-                    if w not in ("and", "the", "for", "men", "women", "kids", "boys", "girls", "with"):
+                    if w not in ("and", "the", "for", "men", "women", "kids", "boys", "girls", "with", "case", "cover", "bag", "sleeve", "strap", "guard"):
                         learned.add(w)
     except Exception:
         pass
@@ -47,24 +47,41 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
     if not hasattr(os_client, "search"):
         return learned, host_devices
     try:
-        # 1. Sample from accessory subcategories
-        res_acc = os_client.search(
-            index=index_name,
-            body={
-                "size": 800,
-                "_source": ["title"],
-                "query": {"wildcard": {"subcategory_name.raw": "*accessori*"}}
-            }
-        )
-        acc_titles = [h["_source"]["title"].lower() for h in res_acc.get("hits", {}).get("hits", []) if "title" in h.get("_source", {})]
+        # 1. Stratified sampling from accessory, protection, and sleeve subcategories
+        acc_queries = [
+            {"wildcard": {"subcategory_name.raw": "*accessori*"}},
+            {"wildcard": {"subcategory_name.raw": "*bag*"}},
+            {"match": {"title": "sleeve"}},
+            {"match": {"title": "sticker"}},
+            {"match": {"title": "stand"}},
+        ]
+        acc_titles = []
+        for q in acc_queries:
+            try:
+                res_p = os_client.search(
+                    index=index_name,
+                    body={"size": 300, "_source": ["title"], "query": q}
+                )
+                acc_titles.extend([h["_source"]["title"].lower() for h in res_p.get("hits", {}).get("hits", []) if "title" in h.get("_source", {})])
+            except Exception:
+                pass
 
         # 2. Sample from non-accessory core subcategories
         res_core = os_client.search(
             index=index_name,
             body={
-                "size": 800,
+                "size": 1500,
                 "_source": ["title"],
-                "query": {"bool": {"must_not": [{"wildcard": {"subcategory_name.raw": "*accessori*"}}]}}
+                "query": {
+                    "bool": {
+                        "must_not": [
+                            {"wildcard": {"subcategory_name.raw": "*accessori*"}},
+                            {"wildcard": {"subcategory_name.raw": "*decor*"}},
+                            {"wildcard": {"subcategory_name.raw": "*furnish*"}},
+                            {"wildcard": {"subcategory_name.raw": "*bag*"}}
+                        ]
+                    }
+                }
             }
         )
         core_titles = [h["_source"]["title"].lower() for h in res_core.get("hits", {}).get("hits", []) if "title" in h.get("_source", {})]
@@ -72,7 +89,7 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
         before_for = Counter()
         after_for = Counter()
         for t in acc_titles:
-            parts = re.split(r'\b(?:for|compatible with|suitable for|fit for|designed for)\b', t, maxsplit=1)
+            parts = re.split(r'\b(?:for|compatible with|suitable for|fit for|designed for|fit with|fits)\b', t, maxsplit=1)
             if len(parts) == 2:
                 for w in set(re.findall(r'[a-z]{3,}', parts[0])):
                     if w not in STOPWORDS:
@@ -81,9 +98,8 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
                     if w not in STOPWORDS:
                         after_for[w] += 1
             else:
-                for w in set(re.findall(r'[a-z]{3,}', t)):
-                    if w not in STOPWORDS:
-                        before_for[w] += 1
+                for w in re.findall(r'\b(?:sleeve|sleeves|sticker|stickers|decal|decals|skin|skins|wrap|wraps|stand|stands|mat|mats|tray|trays|guide|manual|book|books)\b', t):
+                    before_for[w] += 2
 
         core_counts = Counter()
         for t in core_titles:
@@ -94,22 +110,34 @@ def mine_accessory_vocabulary(os_client, index_name: str = "products-v1", core_d
         n_acc = max(len(acc_titles), 1)
         n_core = max(len(core_titles), 1)
 
-        # Host devices predominantly follow 'for' with high frequency (e.g. for iphone, for samsung, for realme)
-        host_devices = {w for w, caft in after_for.items() if caft >= 4 and (caft / (before_for.get(w, 0) + 1)) >= 3.0}
+        # Host devices predominantly follow 'for' (ratio of after / before >= 2.0)
+        host_devices = {w for w, caft in after_for.items() if caft >= 3 and (caft / (before_for.get(w, 0) + 1)) >= 2.0}
+        for hd in list(host_devices):
+            host_devices.update(get_word_variants(hd))
 
-        known_core = set(core_device_words or set()).union(host_devices)
+        known_core = set()
+        for cw in (core_device_words or set()).union(host_devices):
+            known_core.add(cw)
+            known_core.update(get_word_variants(cw))
 
-        for w, cbef in before_for.items():
-            if cbef >= 3:
+        candidates = []
+        for w, cbef in before_for.most_common(300):
+            if cbef >= 2 and w not in host_devices and w not in known_core and len(w) >= 3:
                 cc = core_counts.get(w, 0)
                 odds = (cbef / n_acc) / ((cc + 0.5) / n_core)
                 prep_ratio = cbef / (after_for.get(w, 0) + 1)
-                if (odds >= 1.5 or prep_ratio >= 2.0 or cbef >= 20) and w not in host_devices and w not in known_core and len(w) >= 3:
-                    learned.add(w)
+                if odds >= 1.2 or prep_ratio >= 1.5 or cbef >= 6:
+                    candidates.append(w)
 
-        learned.difference_update(host_devices)
-        learned.difference_update(known_core)
-        return learned, host_devices
+        ordered_learned = []
+        seen = set()
+        for w in candidates:
+            for v in get_word_variants(w):
+                if v not in host_devices and v not in known_core and v not in seen:
+                    seen.add(v)
+                    ordered_learned.append(v)
+
+        return ordered_learned[:120], host_devices
     except Exception:
         return learned, host_devices
 
@@ -205,46 +233,22 @@ def build_taxonomy(source, index_name: str = "products-v1") -> tuple:
         for t in list(core_tokens):
             core_tokens.update(get_word_variants(t))
 
-        # Standard hardware device family mappings
-        if "laptop" in raw_sub:
-            core_tokens.update({"macbook", "macbooks", "chromebook", "chromebooks", "notebook", "notebooks"})
-            all_tokens.update({"macbook", "macbooks", "chromebook", "chromebooks", "notebook", "notebooks"})
-        elif "mobile" in raw_sub or "phone" in raw_sub:
-            core_tokens.update({"iphone", "iphones", "smartphone", "smartphones"})
-            all_tokens.update({"iphone", "iphones", "smartphone", "smartphones"})
-        elif "tablet" in raw_sub:
-            core_tokens.update({"ipad", "ipads"})
-            all_tokens.update({"ipad", "ipads"})
-        elif "refrigerator" in raw_sub:
-            core_tokens.update({"fridge", "fridges"})
-            all_tokens.update({"fridge", "fridges"})
-        elif "television" in raw_sub or "tv" in raw_sub:
-            core_tokens.update({"tv", "tvs", "television", "televisions"})
-            all_tokens.update({"tv", "tvs", "television", "televisions"})
-        elif "air conditioner" in raw_sub:
-            core_tokens.update({"ac", "acs"})
-            all_tokens.update({"ac", "acs"})
-
         detected_demo, _ = extract_demographic(sub_name)
 
         is_acc = (
             "accessori" in raw_sub
             or "accessory" in raw_sub
-            or bool(core_tokens.intersection(acc_keywords))
+            or "decor" in raw_sub
+            or "cover" in raw_sub
+            or "case" in raw_sub
+            or "sleeve" in raw_sub
+            or "strap" in raw_sub
         )
         is_core_hardware = (
             not is_acc
             and (
-                "mobile" in raw_sub
-                or "phone" in raw_sub
-                or "laptop" in raw_sub
-                or "television" in raw_sub
-                or "tv" in raw_sub
-                or "refrigerator" in raw_sub
-                or "washing machine" in raw_sub
-                or "air conditioner" in raw_sub
-                or "tablet" in raw_sub
-                or bool(core_tokens.intersection(core_words))
+                any(k in cat_name.lower() for k in ("electronics", "appliances", "mobiles", "laptops"))
+                or any(k in raw_sub for k in ("mobile", "phone", "laptop", "television", "tv", "refrigerator", "washing", "conditioner", "tablet", "camera", "console", "pc", "computer", "wearable"))
             )
         )
 
