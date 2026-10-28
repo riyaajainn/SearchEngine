@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: product-search-engine
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OPENSEARCH_HOST
+        sync: false
+      - key: OPENSEARCH_PORT
+        value: 9200
+      - key: OPENSEARCH_URL
+        sync: false
+      - key: OPENSEARCH_USER
+        sync: false
+      - key: OPENSEARCH_PASSWORD
+        sync: false
+      - key: OPENSEARCH_USE_SSL
+        value: "true"
+      - key: OPENSEARCH_INDEX
+        value: products-v1
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: fs_graph
+      - key: MONGO_COLLECTION
+        value: price_graph
+      - key: IMAGE_URL_FIELD
+        value: imgurl

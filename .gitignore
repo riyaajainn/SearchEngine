@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large data staging dumps (NEVER commit to git)
+*.jsonl
+products.jsonl
+*.zip
+index_checkpoint.json
+
+# Local environment and secret credentials
+.env
+.env.local
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
