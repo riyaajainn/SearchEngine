@@ -1,7 +1,7 @@
 import re
 from bson import ObjectId
 
-from config import OPENSEARCH_INDEX, get_opensearch_client
+from config import OPENSEARCH_INDEX, get_opensearch_client, TARGET_STORE_IDS
 from nlp_utils import (
     STOPWORDS,
     RE_TOKENS,
@@ -14,6 +14,7 @@ from nlp_utils import (
     parse_price_intent,
     query_has_variant_or_color,
     is_compatibility_stuffed,
+    is_combo_listing,
 )
 from taxonomy_learner import (
     mine_core_device_vocabulary,
@@ -283,7 +284,9 @@ def suggest_correction(os_client, query_str: str, index_name: str = OPENSEARCH_I
             corrected_tokens.append(token)
             continue
 
-        if word_counts.get(clean_token, 0) >= 3:
+        cur_freq = word_counts.get(clean_token, 0)
+        # If the word already occurs heavily in the catalog (>= 150 times), it's a legitimate brand/model/word (e.g. 'sandisk')
+        if cur_freq >= 150:
             corrected_tokens.append(token)
             continue
 
@@ -307,10 +310,17 @@ def suggest_correction(os_client, query_str: str, index_name: str = OPENSEARCH_I
             res = os_client.search(index=index_name, body=suggest_body)
             suggestions = res.get("suggest", {}).get("spell_check", [])
             options = suggestions[0].get("options", []) if suggestions else []
-            if options and options[0].get("score", 0) >= 0.7:
+            min_score = 0.65 if len(clean_token) == 3 else 0.70
+            if options and options[0].get("score", 0) >= min_score:
                 best_suggest = options[0]["text"]
-                corrected_tokens.append(best_suggest)
-                has_change = True
+                sug_freq = options[0].get("freq", 0)
+                # Confirm suggestion is substantially more popular than the input typo:
+                # e.g., 'pandrive' (freq=10) -> 'pendrive' (freq=1454), 'ait' (freq=7) -> 'air' (freq=64075)
+                if (cur_freq < 30 and sug_freq >= 20) or (sug_freq > cur_freq * 5):
+                    corrected_tokens.append(best_suggest)
+                    has_change = True
+                else:
+                    corrected_tokens.append(token)
             else:
                 corrected_tokens.append(token)
         except Exception:
@@ -379,13 +389,19 @@ def post_process_search_hits(
 ) -> list:
     """Filter, disambiguate, and attach metadata to raw search hits."""
     filtered_hits = []
+    target_sid_set = {str(s) for s in TARGET_STORE_IDS}.union({int(s) for s in TARGET_STORE_IDS})
 
     if is_accessory_intent:
         acc_title_tokens = set(DYNAMIC_ACCESSORY_KEYWORDS)
         q_acc_tokens = {t for t in q_tokens if t in acc_title_tokens}
+        individual_hits = []
+        combo_hits = []
 
         for hit in raw_hits:
             src = hit.get("_source", {})
+            doc_sid = src.get("sid")
+            if doc_sid is not None and doc_sid not in target_sid_set and str(doc_sid) not in target_sid_set:
+                continue
             sub_id = str(src.get("sub_cat_id", ""))
             t_lower = (src.get("title") or "").lower()
             t_words = set(RE_TOKENS.findall(t_lower))
@@ -403,14 +419,30 @@ def post_process_search_hits(
                     continue
 
             if re.search(r'\b(?:for|compatible with|suitable for)\b', t_lower) or t_words.intersection(acc_title_tokens):
+                is_combo = is_combo_listing(t_lower, q_tokens, acc_title_tokens)
                 assign_hit_metadata(hit, query, clean_q)
-                filtered_hits.append(hit)
-                if len(filtered_hits) >= limit:
-                    break
+                if is_combo:
+                    hit["is_combo"] = True
+                    hit["_source"]["match_badge"] = "📦 COMBO / BUNDLE"
+                    hit["_source"]["match_badge_color"] = "#c2410c"
+                    hit["_source"]["match_badge_bg"] = "#ffedd5"
+                    combo_hits.append(hit)
+                else:
+                    individual_hits.append(hit)
+
+        filtered_hits = individual_hits + combo_hits
+        if limit:
+            filtered_hits = filtered_hits[:limit]
     else:
         unwanted_acc_set = set(unwanted_acc)
+        individual_hits = []
+        combo_hits = []
+
         for hit in raw_hits:
             src = hit.get("_source", {})
+            doc_sid = src.get("sid")
+            if doc_sid is not None and doc_sid not in target_sid_set and str(doc_sid) not in target_sid_set:
+                continue
             sub_id = str(src.get("sub_cat_id", ""))
             subcat_info = taxonomy.get(sub_id, {})
             sub_name = (subcat_info.get("sub_cat_name") or src.get("subcategory_name") or "").lower()
@@ -422,20 +454,19 @@ def post_process_search_hits(
             if effective_subcat and sub_id != str(effective_subcat):
                 continue
 
-            t_tokens = set(RE_TOKENS.findall(t_lower))
-            if t_tokens.intersection(unwanted_acc_set):
-                continue
             if RE_COMPATIBLE.search(t_lower):
                 continue
 
             # Multi-model compatibility stuffing check
-            if is_compatibility_stuffed(t_lower, q_tokens):
+            if is_compatibility_stuffed(t_lower, q_tokens, unwanted_acc_set):
                 continue
 
-            # Statistical Price Sanity for Core Hardware:
-            # Genuine hardware (laptops, phones, refrigerators, TVs) never costs < ₹1,000.
-            # Low-cost items listed under hardware are misclassified marketplace accessories/skins/guards.
-            if is_core_hardware and effective_max_p is None:
+            # Statistical Price Sanity for Major Hardware:
+            # Major hardware (laptops, phones, refrigerators, TVs, ACs, washing machines) never costs < ₹1,000.
+            # Low-cost items listed under major hardware are misclassified marketplace accessories/skins/guards.
+            # Storage devices (pendrives, memory cards), cables, and small electronics are excluded from this threshold.
+            HIGH_VALUE_HARDWARE_SUBCATS = {"1302", "1202", "1201", "1008", "1011", "1001", "1010", "1005", "1002"}
+            if sub_id in HIGH_VALUE_HARDWARE_SUBCATS and effective_max_p is None:
                 p_val = src.get("price")
                 if p_val is not None and float(p_val) < 1000:
                     continue
@@ -444,10 +475,25 @@ def post_process_search_hits(
             if detected_demo and sub_demo and sub_demo != detected_demo:
                 continue
 
+            is_combo = is_combo_listing(t_lower, q_tokens, unwanted_acc_set)
+
+            t_tokens = set(RE_TOKENS.findall(t_lower))
+            if t_tokens.intersection(unwanted_acc_set) and not is_combo:
+                continue
+
             assign_hit_metadata(hit, query, clean_q)
-            filtered_hits.append(hit)
-            if len(filtered_hits) >= limit:
-                break
+            if is_combo:
+                hit["is_combo"] = True
+                hit["_source"]["match_badge"] = "📦 COMBO / BUNDLE"
+                hit["_source"]["match_badge_color"] = "#c2410c"
+                hit["_source"]["match_badge_bg"] = "#ffedd5"
+                combo_hits.append(hit)
+            else:
+                individual_hits.append(hit)
+
+        filtered_hits = individual_hits + combo_hits
+        if limit:
+            filtered_hits = filtered_hits[:limit]
 
     return filtered_hits
 
@@ -458,12 +504,20 @@ def normalize_scores_and_badges(filtered_hits: list, clean_q: str):
     has_variant_spec = query_has_variant_or_color(clean_q)
 
     if max_score > 0:
+        prev_norm_s = 100.0
         for h in filtered_hits:
             raw_s = h.get("_score") or 0
             norm_s = round((raw_s / max_score) * 100, 1)
             badge = h.get("_source", {}).get("match_badge")
             if not has_variant_spec and badge == "🎯 EXACT TITLE MATCH" and norm_s >= 92.0:
                 norm_s = 100.0
+
+            # Combos placed after individual products shouldn't display a higher score than the individual products before them
+            if h.get("is_combo"):
+                norm_s = min(max(norm_s, round(prev_norm_s * 0.92, 1)), round(prev_norm_s * 0.95, 1))
+
+            norm_s = min(norm_s, prev_norm_s)
+            prev_norm_s = norm_s
             h["raw_score"] = raw_s
             h["_score"] = norm_s
             for item in h.get("_source", {}).get("same_title_products", []):
@@ -471,7 +525,116 @@ def normalize_scores_and_badges(filtered_hits: list, clean_q: str):
                 item_norm = round((item_raw / max_score) * 100, 1)
                 if not has_variant_spec and badge == "🎯 EXACT TITLE MATCH" and item_norm >= 92.0:
                     item_norm = 100.0
-                item["score"] = item_norm
+                item["score"] = min(item_norm, norm_s)
+
+def fetch_product_combos(
+    os_client,
+    clean_q: str,
+    target_subcat: str = None,
+    limit: int = 4,
+    is_core_hardware: bool = False,
+    effective_min_p: float = None,
+    effective_max_p: float = None,
+    index_name: str = OPENSEARCH_INDEX,
+    existing_ids: set = None,
+) -> list:
+    """Fetch verified combo/bundle packages containing the core product to show after individual products."""
+    if not hasattr(os_client, "search") or not clean_q:
+        return []
+
+    q_tokens = [t.lower() for t in RE_TOKENS.findall(clean_q) if t not in STOPWORDS]
+    if not q_tokens:
+        return []
+
+    derivs = set(DYNAMIC_ACCESSORY_KEYWORDS) if DYNAMIC_ACCESSORY_KEYWORDS else set(UNIVERSAL_DERIVATIVE_TERMS)
+    seen_ids = set(existing_ids) if existing_ids else set()
+
+    must_clauses = [{"match_phrase": {"title": clean_q}}]
+    should_clauses = [
+        {"match": {"title": {"query": "combo bundle pack", "boost": 3.0}}},
+        {"match_phrase": {"title": {"query": f"{clean_q} with", "boost": 5.0}}},
+        {"match_phrase": {"title": {"query": f"{clean_q} +", "boost": 4.0}}},
+        {"match_phrase": {"title": {"query": f"{clean_q} &", "boost": 4.0}}},
+    ]
+
+    must_not_clauses = [
+        {"match_phrase": {"title": f"for {clean_q}"}},
+        {"match_phrase": {"title": f"compatible with {clean_q}"}},
+        {"match_phrase": {"title": "trolley"}},
+        {"match_phrase": {"title": "stand"}},
+        {"match_phrase": {"title": "cover"}},
+        {"match_phrase": {"title": "skin"}},
+        {"match_phrase": {"title": "case"}},
+        {"match_phrase": {"title": "bulb"}},
+        {"match_phrase": {"title": "board"}},
+        {"match_phrase": {"title": "guard"}},
+    ]
+
+    filter_clauses = []
+    if target_subcat:
+        filter_clauses.append({"term": {"sub_cat_id": target_subcat}})
+
+    if effective_min_p is not None or effective_max_p is not None:
+        p_range = {}
+        if effective_min_p is not None:
+            p_range["gte"] = effective_min_p
+        if effective_max_p is not None:
+            p_range["lte"] = effective_max_p
+        filter_clauses.append({"range": {"price": p_range}})
+
+    body = {
+        "size": max(limit * 3, 15),
+        "query": {
+            "bool": {
+                "must": must_clauses,
+                "should": should_clauses,
+                "minimum_should_match": 1,
+                "must_not": must_not_clauses,
+                "filter": filter_clauses,
+            }
+        },
+        "_source": [
+            "id", "product_id", "title", "price", "mrp", "discount",
+            "category", "category_name", "sub_cat_id", "subcategory_name",
+            "brand", "sid", "url", "rating"
+        ]
+    }
+
+    try:
+        res = os_client.search(index=index_name, body=body)
+        raw_hits = res.get("hits", {}).get("hits", [])
+        combos = []
+        seen_titles = set()
+
+        for h in raw_hits:
+            h_id = str(h.get("_id") or h.get("_source", {}).get("id"))
+            if h_id in seen_ids:
+                continue
+
+            src = h.get("_source", {})
+            t = (src.get("title") or "")
+            t_norm = " ".join(t.lower().split())
+            if t_norm in seen_titles:
+                continue
+
+            p_val = src.get("price")
+            if is_core_hardware and effective_max_p is None:
+                if p_val is not None and float(p_val) < 1000:
+                    continue
+
+            if is_combo_listing(t, q_tokens, derivs):
+                seen_titles.add(t_norm)
+                seen_ids.add(h_id)
+                h["is_combo"] = True
+                h["_source"]["match_badge"] = "📦 COMBO / BUNDLE"
+                h["_source"]["match_badge_color"] = "#c2410c"
+                h["_source"]["match_badge_bg"] = "#ffedd5"
+                combos.append(h)
+                if len(combos) >= limit:
+                    break
+        return combos
+    except Exception:
+        return []
 
 
 def search_products(
@@ -523,7 +686,8 @@ def search_products(
 
     unwanted_acc = []
     if not is_accessory_intent:
-        for acc in list(DYNAMIC_ACCESSORY_KEYWORDS):
+        all_deriv_candidates = set(DYNAMIC_ACCESSORY_KEYWORDS).union(UNIVERSAL_DERIVATIVE_TERMS)
+        for acc in list(all_deriv_candidates):
             if acc not in q_tokens and len(acc) >= 3:
                 unwanted_acc.append(acc)
 
@@ -597,6 +761,78 @@ def search_products(
         is_core_hardware=is_core_hardware,
         effective_max_p=effective_max_p,
     )
+
+    # Tier 2 Fallback: If exact query returned zero hits due to obscure/unrecognized typo, execute fuzzy search
+    if not filtered_hits and q_tokens:
+        fuzzy_should = []
+        for t in q_tokens:
+            if len(t) >= 3:
+                fuzzy_should.append({
+                    "match": {
+                        "title": {
+                            "query": t,
+                            "fuzziness": "AUTO",
+                            "prefix_length": 1,
+                            "boost": 2.0
+                        }
+                    }
+                })
+        if fuzzy_should:
+            fuzzy_body = dict(body)
+            fuzzy_body["query"] = {
+                "bool": {
+                    "should": fuzzy_should,
+                    "minimum_should_match": 1,
+                    "filter": [f for f in final_query.get("bool", {}).get("filter", [])]
+                }
+            }
+            try:
+                raw_res = os_client.search(index=index_name, body=fuzzy_body)
+                raw_hits = raw_res.get("hits", {}).get("hits", [])
+                filtered_hits = post_process_search_hits(
+                    raw_hits=raw_hits,
+                    query=query,
+                    clean_q=clean_q,
+                    q_tokens=q_tokens,
+                    is_accessory_intent=is_accessory_intent,
+                    taxonomy=taxonomy,
+                    core_device_subcats=core_device_subcats,
+                    unwanted_acc=unwanted_acc,
+                    effective_subcat=effective_subcat,
+                    detected_demo=detected_demo,
+                    limit=limit,
+                    is_core_hardware=is_core_hardware,
+                    effective_max_p=effective_max_p,
+                )
+            except Exception:
+                pass
+
+    # When searching for a core product, also fetch matching combos
+    # and rank them AFTER the individual products:
+    if not is_accessory_intent and filtered_hits:
+        existing_combos = sum(1 for h in filtered_hits if h.get("is_combo"))
+        combos_target = max(3, int(limit * 0.15))
+        if existing_combos < combos_target:
+            combos_needed = combos_target - existing_combos
+            extra_combos = fetch_product_combos(
+                os_client=os_client,
+                clean_q=clean_q,
+                target_subcat=effective_subcat,
+                limit=combos_needed,
+                is_core_hardware=is_core_hardware,
+                effective_min_p=effective_min_p,
+                effective_max_p=effective_max_p,
+                index_name=index_name,
+                existing_ids=set(str(h.get("_id") or h.get("_source", {}).get("id")) for h in filtered_hits),
+            )
+            if extra_combos:
+                for c in extra_combos:
+                    assign_hit_metadata(c, query, clean_q)
+                    c["is_combo"] = True
+                    c["_source"]["match_badge"] = "📦 COMBO / BUNDLE"
+                    c["_source"]["match_badge_color"] = "#c2410c"
+                    c["_source"]["match_badge_bg"] = "#ffedd5"
+                filtered_hits.extend(extra_combos)
 
     normalize_scores_and_badges(filtered_hits, clean_q)
 

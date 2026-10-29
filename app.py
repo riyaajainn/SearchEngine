@@ -29,6 +29,7 @@ from config import (
     IMAGE_URL_FIELD,
     STORE_SLUGS,
     STORE_DISPLAY_NAMES,
+    TARGET_STORE_IDS,
     get_opensearch_client,
 )
 
@@ -89,7 +90,7 @@ def build_direct_store_url(sid, pid):
     p = str(pid).strip()
     if s == "1":
         return f"https://www.flipkart.com/product/p/itme?pid={p}"
-    elif s in ("2", "22"):
+    elif s == "2":
         return f"https://www.amazon.in/dp/{p}"
     elif s == "5":
         return f"https://www.jiomart.com/p/{p}"
@@ -99,10 +100,14 @@ def build_direct_store_url(sid, pid):
         return f"https://www.myntra.com/{p}"
     elif s == "9":
         return f"https://www.ajio.com/p/{p}"
+    elif s == "10":
+        return f"https://www.pepperfry.com/site_product/{p}.html"
     elif s == "13":
         return f"https://www.croma.com/p/{p}"
     elif s == "14":
         return f"https://www.reliancedigital.in/p/{p}"
+    elif s == "15":
+        return f"https://www.meesho.com/s/p/{p}"
     return None
 
 st.set_page_config(
@@ -466,6 +471,7 @@ with col_search:
         "Search for a product title",
         placeholder="Search products across all departments...",
         key="search_input",
+        autocomplete="off",
     )
 
 with col_btn:
@@ -491,6 +497,21 @@ components.html(
             const input = parentDoc.querySelector('input[aria-label="Search for a product title"]');
             if (!input) {{
                 return setTimeout(initDropdown, 100);
+            }}
+
+            // Strictly suppress browser native autocomplete, autofill tooltip, and spellcheck
+            input.autocomplete = "off";
+            input.setAttribute("autocomplete", "off");
+            input.setAttribute("autocorrect", "off");
+            input.setAttribute("autocapitalize", "off");
+            input.setAttribute("spellcheck", "false");
+            input.setAttribute("aria-autocomplete", "none");
+            input.setAttribute("data-lpignore", "true");
+            input.setAttribute("data-form-type", "other");
+
+            const parentForm = input.closest("form");
+            if (parentForm) {{
+                parentForm.setAttribute("autocomplete", "off");
             }}
 
             // Get or create dropdown container attached to parent document body
@@ -519,17 +540,23 @@ components.html(
 
             let selectedIndex = -1;
             let currentMatches = [];
+            let originalTypedValue = "";
+
+            function setInputPreview(val) {{
+                if (!input) return;
+                const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, "value").set;
+                if (nativeSetter) {{
+                    nativeSetter.call(input, val);
+                }} else {{
+                    input.value = val;
+                }}
+            }}
 
             function selectItem(val) {{
                 dropdown.style.display = "none";
                 if (input) {{
                     input.focus();
-                    const nativeSetter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype, "value").set;
-                    if (nativeSetter) {{
-                        nativeSetter.call(input, val);
-                    }} else {{
-                        input.value = val;
-                    }}
+                    setInputPreview(val);
                     input.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     input.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 }}
@@ -761,7 +788,9 @@ components.html(
                     }}
 
                     row.onmouseenter = () => {{
-                        row.style.background = "#f1f5f9";
+                        selectedIndex = idx;
+                        updateHighlight(dropdown.querySelectorAll(".live-sug-item"));
+                        setInputPreview(item);
                     }};
                     row.onmouseleave = () => {{
                         if (selectedIndex !== idx) {{
@@ -779,6 +808,15 @@ components.html(
                     dropdown.appendChild(row);
                 }});
 
+                // When user moves mouse away from the dropdown without selecting, restore their typed query
+                dropdown.onmouseleave = () => {{
+                    if (originalTypedValue !== undefined && input) {{
+                        setInputPreview(originalTypedValue);
+                        selectedIndex = -1;
+                        updateHighlight(dropdown.querySelectorAll(".live-sug-item"));
+                    }}
+                }};
+
                 dropdown.style.display = "block";
             }}
 
@@ -792,9 +830,10 @@ components.html(
                 }});
             }}
 
-            // Live keystroke autocomplete matching from 2 letters onwards directly in the database
+            // Live keystroke autocomplete matching from 2 letters onwards purely via the API
             let liveDebounceTimer = null;
             input.oninput = () => {{
+                originalTypedValue = input.value;
                 const val = input.value.trim().toLowerCase();
                 if (val.length < 2) {{
                     if (!val) {{
@@ -805,51 +844,82 @@ components.html(
                     return;
                 }}
 
-                // 1. Instantly display local high-confidence predictions
-                const localMatches = getFilteredSuggestions(val);
-                renderDropdown(localMatches);
-
-                // 2. Query live database directly from 2 characters onwards (Google-style)
+                // Query live autocomplete API directly from 2 characters onwards
                 clearTimeout(liveDebounceTimer);
                 liveDebounceTimer = setTimeout(() => {{
                     fetch('{AUTOCOMPLETE_ENDPOINT_URL}?q=' + encodeURIComponent(val))
                         .then(r => r.json())
                         .then(dbSugs => {{
-                            if (input.value.trim().toLowerCase() === val && dbSugs && dbSugs.length) {{
-                                const combined = [...dbSugs, ...localMatches];
-                                const deduped = Array.from(new Set(combined)).slice(0, 8);
-                                renderDropdown(deduped);
+                            if (input.value.trim().toLowerCase() === val) {{
+                                if (dbSugs && dbSugs.length) {{
+                                    renderDropdown(dbSugs.slice(0, 8));
+                                }} else {{
+                                    dropdown.style.display = "none";
+                                }}
                             }}
                         }})
-                        .catch(() => {{}});
-                }}, 40);
+                        .catch(() => {{
+                            dropdown.style.display = "none";
+                        }});
+                }}, 30);
             }};
 
             input.onfocus = () => {{
+                originalTypedValue = input.value;
                 const val = input.value.trim().toLowerCase();
                 if (val.length >= 2) {{
-                    renderDropdown(getFilteredSuggestions(val));
+                    fetch('{AUTOCOMPLETE_ENDPOINT_URL}?q=' + encodeURIComponent(val))
+                        .then(r => r.json())
+                        .then(dbSugs => {{
+                            if (input.value.trim().toLowerCase() === val && dbSugs && dbSugs.length) {{
+                                renderDropdown(dbSugs.slice(0, 8));
+                            }}
+                        }})
+                        .catch(() => {{}});
                 }} else if (!val) {{
                     renderDropdown(historyList.slice(0, 5));
                 }}
             }};
 
             input.onkeydown = (e) => {{
+                if (e.key === "Enter") {{
+                    if (dropdown.style.display === "block" && selectedIndex >= 0 && selectedIndex < currentMatches.length) {{
+                        e.preventDefault();
+                        selectItem(currentMatches[selectedIndex]);
+                        return;
+                    }} else {{
+                        dropdown.style.display = "none";
+                        dropdown.innerHTML = "";
+                        selectedIndex = -1;
+                        originalTypedValue = input.value;
+                        return;
+                    }}
+                }}
+                if (e.key === "Escape") {{
+                    dropdown.style.display = "none";
+                    dropdown.innerHTML = "";
+                    selectedIndex = -1;
+                    if (originalTypedValue !== undefined) {{
+                        setInputPreview(originalTypedValue);
+                    }}
+                    return;
+                }}
                 if (dropdown.style.display !== "block" || !currentMatches.length) return;
                 const items = dropdown.querySelectorAll(".live-sug-item");
                 if (e.key === "ArrowDown") {{
                     e.preventDefault();
                     selectedIndex = (selectedIndex + 1) % items.length;
                     updateHighlight(items);
+                    if (selectedIndex >= 0 && selectedIndex < currentMatches.length) {{
+                        setInputPreview(currentMatches[selectedIndex]);
+                    }}
                 }} else if (e.key === "ArrowUp") {{
                     e.preventDefault();
                     selectedIndex = (selectedIndex - 1 + items.length) % items.length;
                     updateHighlight(items);
-                }} else if (e.key === "Enter" && selectedIndex >= 0 && selectedIndex < currentMatches.length) {{
-                    e.preventDefault();
-                    selectItem(currentMatches[selectedIndex]);
-                }} else if (e.key === "Escape") {{
-                    dropdown.style.display = "none";
+                    if (selectedIndex >= 0 && selectedIndex < currentMatches.length) {{
+                        setInputPreview(currentMatches[selectedIndex]);
+                    }}
                 }}
             }};
 
@@ -860,6 +930,11 @@ components.html(
             parentDoc._liveDropdownClickHandler = (e) => {{
                 if (e.target !== input && !dropdown.contains(e.target)) {{
                     dropdown.style.display = "none";
+                    dropdown.innerHTML = "";
+                    selectedIndex = -1;
+                    if (originalTypedValue !== undefined && !e.target.closest("button")) {{
+                        setInputPreview(originalTypedValue);
+                    }}
                 }}
             }};
             parentDoc.addEventListener("click", parentDoc._liveDropdownClickHandler);
@@ -1018,6 +1093,24 @@ if active_query:
                 list(dict.fromkeys(product_ids)),
                 image_url_field=IMAGE_URL_FIELD,
             )
+
+            # Restrict results strictly to target supported stores (Flipkart, Amazon, JioMart, Tata CLiQ, Myntra, Ajio, Pepperfry, Croma, Reliance Digital, Meesho)
+            target_sid_set = {str(s) for s in TARGET_STORE_IDS}.union({int(s) for s in TARGET_STORE_IDS})
+            valid_hits = []
+            for hit in hits:
+                src = hit.get("_source", {})
+                pid = str(src.get("product_id", ""))
+                mdoc = mongo_products.get(pid)
+                doc_sid = (mdoc and mdoc.get("sid")) or src.get("sid")
+                if doc_sid is None or (doc_sid not in target_sid_set and str(doc_sid) not in target_sid_set):
+                    continue
+                if "same_title_products" in src:
+                    src["same_title_products"] = [
+                        sp for sp in src["same_title_products"]
+                        if (mongo_products.get(str(sp.get("product_id")), {}).get("sid") or sp.get("sid")) in target_sid_set
+                    ]
+                valid_hits.append(hit)
+            hits = valid_hits
 
         st.success(f"Found {total_hits:,} search matches.")
 

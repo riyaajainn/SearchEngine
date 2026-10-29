@@ -4,6 +4,7 @@ import math
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from config import TARGET_STORE_IDS
 
 load_dotenv()
 
@@ -49,6 +50,7 @@ def main():
             "title": {"$exists": True, "$ne": None},
             "category": {"$exists": True, "$ne": None},
             "sub_cat_id": {"$exists": True, "$ne": None},
+            "sid": {"$in": TARGET_STORE_IDS},
         }
 
         projection = {
@@ -58,6 +60,7 @@ def main():
             "sub_cat_id": 1,
             "brand": 1,
             "price": 1,
+            "sid": 1,
         }
 
         cursor = collection.find(
@@ -86,6 +89,7 @@ def main():
                     "sub_cat_id": sub_cat_id,
                     "brand": brand,
                     "price": clean_value(doc.get("price")),
+                    "sid": clean_value(doc.get("sid")),
                 }
 
                 output.write(

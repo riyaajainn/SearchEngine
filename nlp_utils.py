@@ -17,14 +17,19 @@ UNIVERSAL_DERIVATIVE_TERMS = frozenset({
     # Protection, cases & skins
     "case", "cases", "cover", "covers", "skin", "skins", "guard", "guards", "glass", "glasses",
     "tempered", "protector", "protectors", "film", "films", "shield", "shields", "sleeve", "sleeves",
-    "pouch", "pouches", "bag", "bags", "sticker", "stickers", "decal", "decals", "wrap", "wraps",
+    "pouch", "pouches", "bag", "bags", "backpack", "backpacks", "sticker", "stickers", "decal", "decals", "wrap", "wraps",
     # Mounting, stands & holding
     "stand", "stands", "holder", "holders", "mount", "mounts", "bracket", "brackets", "tripod", "tripods",
     "dock", "docks", "cradle", "cradles", "strap", "straps", "band", "bands", "clip", "clips", "hook", "hooks",
+    "trolley", "trolleys", "cart", "carts", "tray", "trays",
+    # Peripherals, optics & solar
+    "lens", "lenses", "panel", "panels", "mouse", "keyboard", "soundbar",
     # Replacement parts, spares & internal components
     "replacement", "replacements", "spare", "spares", "part", "parts", "fan", "fans", "hinge", "hinges",
     "keycap", "keycaps", "motherboard", "motherboards", "bezel", "bezels", "housing", "casing",
     "screw", "screws", "filter", "filters", "cartridge", "cartridges", "toner", "toners", "ink", "inks",
+    "thermostat", "thermostats", "valve", "valves", "compressor", "compressors", "condenser", "condensers",
+    "coil", "coils", "motor", "motors", "pcb", "pcbs", "gasket", "gaskets", "defrost", "relay", "relays",
     # Automotive / vehicle parts
     "headlight", "headlights", "horn", "horns", "lamp", "lamps", "bulb", "bulbs", "mirror", "mirrors",
     "bumper", "bumpers", "mudguard", "mudguards", "reflector", "reflectors",
@@ -160,26 +165,86 @@ def query_has_variant_or_color(query_str: str) -> bool:
     return bool(STORAGE_PATTERN.search(query_str.lower()))
 
 
-def is_compatibility_stuffed(title: str, query_tokens: list) -> bool:
+def is_compatibility_stuffed(title: str, query_tokens: list, derivative_words: set = None) -> bool:
     """
     Data-driven keyword stuffing and multi-model compatibility detector.
-    If the user's queried model or phrase repeats multiple times in a comma-delimited title,
-    it is a third-party accessory/compatibility listing rather than the genuine product.
+    If the user's queried product token repeats multiple times in the title:
+    - Repeated 3+ times unconditionally (blatant SEO spam)
+    - Repeated 2+ times with any derivative/accessory keyword, relational markers,
+      or multi-model conjunction phrases (e.g. 'MacBook Pro & MacBook Air', 'iPhone 15 & iPhone 16')
+    it is a third-party accessory, tutorial guide/book, or compatibility listing rather than the genuine product.
     """
-    if not query_tokens or len(query_tokens) < 1:
+    if not query_tokens or not title:
         return False
     t_lower = title.lower()
+    derivs = set(derivative_words).union(UNIVERSAL_DERIVATIVE_TERMS) if derivative_words else set(UNIVERSAL_DERIVATIVE_TERMS)
 
-    # Exact multi-token phrase repeated 2+ times
+    for tok in query_tokens:
+        if len(tok) < 3 and not tok.isdigit():
+            continue
+        occurrences = len(re.findall(r'\b' + re.escape(tok) + r'\b', t_lower))
+        if occurrences >= 2:
+            # 1. Unconditional spam: repeated 3+ times
+            if occurrences >= 3:
+                return True
+            # 2. Repeated 2 times AND contains any accessory/derivative word, relational marker, or multi-model joiner
+            has_deriv = any(bool(re.search(r'\b' + re.escape(d) + r'\b', t_lower)) for d in derivs)
+            has_relational = bool(re.search(r'\b(?:for|suitable for|compatible with|fit for)\b', t_lower))
+            has_multi_model = bool(re.search(r'\b' + re.escape(tok) + r'\b.*?[\&\|/,\+]\s*.*?\b' + re.escape(tok) + r'\b', t_lower))
+            if has_deriv or has_relational or has_multi_model:
+                return True
+
     if len(query_tokens) >= 2:
         q_phrase = " ".join(query_tokens)
         if len(re.findall(re.escape(q_phrase), t_lower)) >= 2:
             return True
 
-    # Main model token repeated 3+ times with commas or relational preposition
-    for tok in query_tokens:
-        if (len(tok) >= 3 or tok.isdigit()) and len(re.findall(r'\b' + re.escape(tok) + r'\b', t_lower)) >= 3:
-            if ',' in t_lower or 'for' in t_lower:
+    return False
+
+
+RE_COMBO_WORDS = re.compile(r'\b(?:combo|bundle|pack\s+of\s+\d+|set\s+of\s+\d+)\b', re.I)
+RE_CONJUNCTION = re.compile(r'\bwith\b|\s\+\s|(?:\s|^)&\s|\band\b', re.I)
+
+
+def is_combo_listing(
+    title: str,
+    query_tokens: list = None,
+    derivative_words: set = None,
+    core_device_words: set = None
+) -> bool:
+    """
+    Universally determine if a product title represents a bundled combo package containing
+    a primary product along with secondary accessories or items across all categories.
+    Zero hardcoded models, brands, or categories.
+    """
+    if not title:
+        return False
+    t_lower = title.lower()
+
+    # 1. Explicit combo or bundle keyword across all product categories
+    if RE_COMBO_WORDS.search(t_lower):
+        return True
+
+    # 2. Conjunction patterns joining multiple distinct products: "with ...", " + ...", " & ..."
+    if re.search(r'\b(?:with|\+|&)\b', t_lower):
+        parts = re.split(r'\bwith\b|\s\+\s|(?:\s|^)&\s', t_lower, maxsplit=1)
+        prefix_tokens = set(RE_TOKENS.findall(parts[0]))
+        suffix_tokens = set(RE_TOKENS.findall(parts[1])) if len(parts) > 1 else set()
+
+        derivs = set(derivative_words) if derivative_words else set(UNIVERSAL_DERIVATIVE_TERMS)
+        core_voc = set(core_device_words) if core_device_words else set()
+        q_toks = set(query_tokens) if query_tokens else set()
+
+        # If suffix contains any derivative / accessory / peripheral / bundle item
+        if suffix_tokens.intersection(derivs):
+            # And prefix has meaningful product or model tokens
+            if len(prefix_tokens - STOPWORDS) >= 1:
                 return True
 
+        # If both sides contain distinct device, category, or query nouns (e.g. Inverter + Battery, Camera + Lens)
+        if (prefix_tokens.intersection(q_toks) or prefix_tokens.intersection(core_voc)) and \
+           (suffix_tokens.intersection(derivs) or suffix_tokens.intersection(core_voc)):
+            return True
+
     return False
+

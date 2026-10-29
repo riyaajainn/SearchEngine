@@ -65,6 +65,7 @@ mapping = {
                 },
             },
             "price": {"type": "float"},
+            "sid": {"type": "keyword"},
         },
     },
 }

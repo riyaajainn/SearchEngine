@@ -1,4 +1,5 @@
 from nlp_utils import get_word_variants
+from config import TARGET_STORE_IDS
 
 
 def build_search_query_dsl(
@@ -45,11 +46,23 @@ def build_search_query_dsl(
         }
     })
 
-    # 2. Filters (Price boundaries)
+    # 2. Filters (Price boundaries & Target Stores)
     if effective_min_p is not None:
         filter_clauses.append({"range": {"price": {"gte": effective_min_p}}})
     if effective_max_p is not None:
         filter_clauses.append({"range": {"price": {"lte": effective_max_p}}})
+
+    # Restrict to target stores whenever 'sid' is present in document
+    target_store_terms = [{"term": {"sid": str(s)}} for s in TARGET_STORE_IDS] + [{"term": {"sid": int(s)}} for s in TARGET_STORE_IDS]
+    filter_clauses.append({
+        "bool": {
+            "should": [
+                {"bool": {"must_not": {"exists": {"field": "sid"}}}},
+                *target_store_terms
+            ],
+            "minimum_should_match": 1
+        }
+    })
 
     # 3. Should Clauses (Relevance boosts)
     should_clauses.append({"match_phrase": {"title": {"query": clean_q, "boost": 20.0}}})

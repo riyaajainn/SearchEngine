@@ -1,4 +1,7 @@
 import os
+import http.client
+http.client._MAXHEADERS = 1000
+
 from dotenv import load_dotenv
 from opensearchpy import OpenSearch
 
@@ -32,30 +35,36 @@ MONGO_DB = os.getenv("MONGO_DB", "fs_graph").strip()
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "price_graph").strip()
 IMAGE_URL_FIELD = os.getenv("IMAGE_URL_FIELD", "imgurl").strip()
 
-# Store Slugs and Display Names
+# Store Slugs and Display Names for Target Supported Stores
 STORE_SLUGS = {
     "1": "flipkart",
     "2": "amazon",
-    "22": "amazon",
     "5": "jiomart",
     "6": "tatacliq",
     "7": "myntra",
     "9": "ajio",
+    "10": "pepperfry",
     "13": "croma",
     "14": "reliancedigital",
+    "15": "meesho",
 }
 
 STORE_DISPLAY_NAMES = {
     "1": "Flipkart",
     "2": "Amazon",
-    "22": "Amazon",
     "5": "JioMart",
     "6": "Tata CLiQ",
     "7": "Myntra",
     "9": "Ajio",
+    "10": "Pepperfry",
     "13": "Croma",
     "14": "Reliance Digital",
+    "15": "Meesho",
 }
+
+# The target list of active stores allowed in extraction & indexing
+TARGET_STORE_IDS = [1, 2, 5, 6, 7, 9, 10, 13, 14, 15]
+
 
 
 def get_opensearch_client(timeout: int = 10, max_retries: int = 2) -> OpenSearch:
